@@ -1,5 +1,5 @@
 import type { MeasureContext, Metrics } from '@hcengineering/core'
-import { concatLink, MeasureMetricsContext, metricsToString, newMetrics, systemAccountEmail } from '@hcengineering/core'
+import { concatLink, MeasureMetricsContext, metricsToString, newMetrics, systemAccountUuid } from '@hcengineering/core'
 import { generateToken } from '@hcengineering/server-token'
 import { writeFile } from 'fs/promises'
 import os from 'os'
@@ -79,6 +79,8 @@ export function initStatisticsContext (
     logConsole?: boolean
     factory?: () => MeasureMetricsContext
     getUsers?: () => WorkspaceStatistics[]
+    statsUrl?: string
+    serviceName?: () => string
   }
 ): MeasureContext {
   let metricsContext: MeasureMetricsContext
@@ -88,7 +90,7 @@ export function initStatisticsContext (
     metricsContext = new MeasureMetricsContext(serviceName, {}, {}, newMetrics())
   }
 
-  const statsUrl = process.env.STATS_URL
+  const statsUrl = ops?.statsUrl ?? process.env.STATS_URL
 
   const metricsFile = ops?.logFile
 
@@ -100,7 +102,6 @@ export function initStatisticsContext (
     }
     let oldMetricsValue = ''
     const serviceId = encodeURIComponent(os.hostname() + '-' + serviceName)
-
     const handleError = (err: any): void => {
       errorToSend++
       if (errorToSend % 2 === 0) {
@@ -127,9 +128,9 @@ export function initStatisticsContext (
           }
         }
         if (statsUrl !== undefined) {
-          const token = generateToken(systemAccountEmail, { name: '' }, { service: 'true' })
+          const token = generateToken(systemAccountUuid, undefined, { service: 'true' })
           const data: ServiceStatistics = {
-            serviceName,
+            serviceName: ops?.serviceName?.() ?? serviceName,
             cpu: getCPUInfo(),
             memory: getMemoryInfo(),
             stats: metricsContext.metrics,

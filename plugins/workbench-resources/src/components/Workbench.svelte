@@ -14,7 +14,7 @@
 -->
 <script lang="ts">
   import { Analytics } from '@hcengineering/analytics'
-  import contact, { PersonAccount } from '@hcengineering/contact'
+  import contact, { getCurrentEmployee } from '@hcengineering/contact'
   import { personByIdStore } from '@hcengineering/contact-resources'
   import core, {
     AccountRole,
@@ -126,7 +126,7 @@
   import { get } from 'svelte/store'
 
   const HIDE_NAVIGATOR = 720
-  const HIDE_ASIDE = 1024
+  const FLOAT_ASIDE = 1024 // lg
   let contentPanel: HTMLElement
 
   const { setTheme } = getContext<{ setTheme: (theme: string) => void }>('theme')
@@ -144,6 +144,10 @@
   let createItemDialog: AnyComponent | undefined
   let createItemLabel: IntlString | undefined
 
+  const account = getCurrentAccount()
+  const me = getCurrentEmployee()
+  $: person = $personByIdStore.get(me)
+
   migrateViewOpttions()
 
   const excludedApps = getMetadata(workbench.metadata.ExcludedApplications) ?? []
@@ -159,19 +163,12 @@
 
   const linkProviders = client.getModel().findAllSync(view.mixin.LinkIdProvider, {})
 
+  const mobileAdaptive = $deviceInfo.isMobile && $deviceInfo.minWidth
   const defaultNavigator = !(getMetadata(workbench.metadata.NavigationExpandedDefault) ?? true)
   const savedNavigator = localStorage.getItem('hiddenNavigator')
-  const savedAside = localStorage.getItem('hiddenAside')
   let hiddenNavigator: boolean = savedNavigator !== null ? savedNavigator === 'true' : defaultNavigator
-  let hiddenAside: boolean = savedAside !== null ? savedAside === 'true' : defaultNavigator
+  let hiddenAside: boolean = true
   $deviceInfo.navigator.visible = !hiddenNavigator
-  $deviceInfo.aside.visible = !hiddenAside
-  sidebarStore.subscribe((sidebar) => {
-    if (!$deviceInfo.aside.float) {
-      hiddenAside = sidebar.variant === SidebarVariant.MINI
-      localStorage.setItem('hiddenAside', `${hiddenAside}`)
-    }
-  })
 
   async function toggleNav (): Promise<void> {
     $deviceInfo.navigator.visible = !$deviceInfo.navigator.visible
@@ -193,7 +190,7 @@
   const query = createQuery()
   $: query.query(
     workbench.class.WorkbenchTab,
-    { attachedTo: account._id },
+    { attachedTo: { $in: account.socialIds } },
     (res) => {
       tabs = res
       tabsStore.set(tabs)
@@ -243,7 +240,7 @@
         } else {
           console.log('Creating new tab on init')
           const _id = await client.createDoc(workbench.class.WorkbenchTab, core.space.Workspace, {
-            attachedTo: account._id,
+            attachedTo: account.primarySocialId,
             location: url,
             isPinned: false
           })
@@ -264,10 +261,6 @@
     syncSidebarState()
     syncWorkbenchTab()
   })
-
-  const account = getCurrentAccount() as PersonAccount
-
-  $: person = $personByIdStore.get(account.person)
 
   const workspaceId = $location.path[1]
   const inboxClient = InboxNotificationsClientImpl.createClient()
@@ -308,18 +301,18 @@
   let windowWorkspaceName = ''
 
   async function updateWindowTitle (loc: Location): Promise<void> {
-    let ws = loc.path[1]
-    const wsName = $workspacesStore.find((it) => it.workspace === ws)
-    if (wsName !== undefined) {
-      ws = wsName?.workspaceName ?? wsName.workspace
-      windowWorkspaceName = ws
+    let wsUrl = loc.path[1]
+    const ws = $workspacesStore.find((it) => it.url === wsUrl)
+    if (ws !== undefined) {
+      wsUrl = ws?.name ?? ws.url
+      windowWorkspaceName = wsUrl
     }
     const docTitle = await getWindowTitle(loc)
     if (docTitle !== undefined && docTitle !== '') {
-      document.title = ws == null ? docTitle : `${docTitle} - ${ws}`
+      document.title = wsUrl == null ? docTitle : `${docTitle} - ${wsUrl}`
     } else {
       const title = getMetadata(workbench.metadata.PlatformTitle) ?? 'Platform'
-      document.title = ws == null ? title : `${ws} - ${title}`
+      document.title = wsUrl == null ? title : `${wsUrl} - ${title}`
     }
     void broadcastEvent(workbench.event.NotifyTitle, document.title)
   }
@@ -591,10 +584,10 @@
   async function updateSpace (spaceId?: Ref<Space>): Promise<void> {
     if (spaceId === currentSpace) return
     clear(2)
+    currentSpace = spaceId
     if (spaceId === undefined) return
     const space = await client.findOne<Space>(core.class.Space, { _id: spaceId })
     if (space === undefined) return
-    currentSpace = spaceId
     const spaceClass = client.getHierarchy().getClass(space._class)
     const view = client.getHierarchy().as(spaceClass, workbench.mixin.SpaceView)
     currentView = view.view
@@ -642,37 +635,42 @@
     }
   }
   checkWorkbenchWidth()
-  $: if ($deviceInfo.docWidth <= HIDE_ASIDE && !$deviceInfo.aside.float) {
-    $deviceInfo.aside.visible = false
-    $deviceInfo.aside.float = true
-  } else if ($deviceInfo.docWidth > HIDE_ASIDE && $deviceInfo.aside.float) {
-    $deviceInfo.aside.float = false
-    $deviceInfo.aside.visible = !hiddenAside
+  $: if ($deviceInfo.docWidth <= FLOAT_ASIDE && !$sidebarStore.float) {
+    hiddenAside = $sidebarStore.variant === SidebarVariant.MINI
+    $sidebarStore.float = true
+  } else if ($deviceInfo.docWidth > FLOAT_ASIDE && $sidebarStore.float) {
+    $sidebarStore.float = false
+    $sidebarStore.variant = hiddenAside ? SidebarVariant.MINI : SidebarVariant.EXPANDED
   }
   const checkOnHide = (): void => {
     if ($deviceInfo.navigator.visible && $deviceInfo.navigator.float) $deviceInfo.navigator.visible = false
   }
   let oldNavVisible: boolean = $deviceInfo.navigator.visible
-  let oldASideVisible: boolean = $deviceInfo.aside.visible
-  $: if (oldNavVisible !== $deviceInfo.navigator.visible || oldASideVisible !== $deviceInfo.aside.visible) {
-    if ($deviceInfo.isMobile && $deviceInfo.isPortrait && $deviceInfo.navigator.float) {
-      if ($deviceInfo.navigator.visible && $deviceInfo.aside.visible) {
+  let oldASideVisible: boolean = $sidebarStore.variant !== SidebarVariant.MINI
+  $: if (
+    oldNavVisible !== $deviceInfo.navigator.visible ||
+    oldASideVisible !== ($sidebarStore.variant !== SidebarVariant.MINI)
+  ) {
+    if (mobileAdaptive && $deviceInfo.navigator.float) {
+      if ($deviceInfo.navigator.visible && $sidebarStore.variant !== SidebarVariant.MINI) {
         if (oldNavVisible) $deviceInfo.navigator.visible = false
-        else $deviceInfo.aside.visible = false
+        else $sidebarStore.variant = SidebarVariant.MINI
       }
     }
     oldNavVisible = $deviceInfo.navigator.visible
-    oldASideVisible = $deviceInfo.aside.visible
+    oldASideVisible = $sidebarStore.variant !== SidebarVariant.MINI
   }
   $: if (
-    $deviceInfo.aside.float &&
-    $deviceInfo.aside.visible &&
-    $sidebarStore.variant === SidebarVariant.MINI &&
+    $sidebarStore.float &&
+    $sidebarStore.variant !== SidebarVariant.MINI &&
+    $sidebarStore.widget === undefined &&
     $sidebarStore.widgetsState.size > 0
   ) {
-    $sidebarStore.variant = SidebarVariant.EXPANDED
     $sidebarStore.widget = Array.from($sidebarStore.widgetsState.keys())[0]
   }
+  location.subscribe(() => {
+    if (mobileAdaptive && $sidebarStore.variant !== SidebarVariant.MINI) $sidebarStore.variant = SidebarVariant.MINI
+  })
   $: $deviceInfo.navigator.direction = $deviceInfo.isMobile && $deviceInfo.isPortrait ? 'horizontal' : 'vertical'
   let appsMini: boolean
   $: appsMini =
@@ -778,10 +776,7 @@
       <path d="M15.8,17.5h1.8v-0.4C17,17.4,16.4,17.5,15.8,17.5z" />
     </clipPath>
   </svg>
-  <div
-    class="workbench-container"
-    style:flex-direction={$deviceInfo.navigator.direction === 'horizontal' ? 'column-reverse' : 'row'}
-  >
+  <div class="workbench-container apps-{$deviceInfo.navigator.direction}">
     <div
       class="antiPanel-application {$deviceInfo.navigator.direction} no-print"
       class:lastDivider={!$deviceInfo.navigator.visible}
@@ -896,7 +891,7 @@
           >
             <Component
               is={contact.component.Avatar}
-              props={{ person, name: person?.name, size: 'small', account: account._id, showStatus: true }}
+              props={{ person, name: person?.name, size: 'small', showStatus: true }}
             />
           </div>
         </div>
@@ -908,133 +903,130 @@
         application: currentApplication?._id
       }}
     />
-    <div
-      class="workbench-container inner"
-      class:rounded={$sidebarStore.variant === SidebarVariant.EXPANDED}
-      use:resizeObserver={(element) => {
-        workbenchWidth = element.clientWidth
-        checkWorkbenchWidth()
-      }}
-    >
-      <!-- svelte-ignore a11y-click-events-have-key-events -->
-      <!-- svelte-ignore a11y-no-static-element-interactions -->
-      {#if $deviceInfo.navigator.float && $deviceInfo.navigator.visible}
-        <div class="cover shown" on:click={() => ($deviceInfo.navigator.visible = false)} />
-      {/if}
-      {#if mainNavigator}
-        <div
-          class="antiPanel-navigator no-print {$deviceInfo.navigator.direction === 'horizontal'
-            ? 'portrait'
-            : 'landscape'} border-left"
-          class:fly={$deviceInfo.navigator.float}
-        >
-          <div class="antiPanel-wrap__content hulyNavPanel-container">
-            {#if currentApplication}
-              <NavHeader label={currentApplication.label} />
-              {#if currentApplication.navHeaderComponent}
-                <Component
-                  is={currentApplication.navHeaderComponent}
-                  props={{
-                    currentSpace,
-                    currentSpecial,
-                    currentFragment
-                  }}
-                  shrink
-                />
+    <div class="flex-row-center w-full h-full">
+      <div
+        class="workbench-container inner"
+        class:rounded={$sidebarStore.variant === SidebarVariant.EXPANDED}
+        use:resizeObserver={(element) => {
+          workbenchWidth = element.clientWidth
+          checkWorkbenchWidth()
+        }}
+      >
+        <!-- svelte-ignore a11y-click-events-have-key-events -->
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        {#if $deviceInfo.navigator.float && $deviceInfo.navigator.visible}
+          <div class="cover shown" on:click={() => ($deviceInfo.navigator.visible = false)} />
+        {/if}
+        {#if mainNavigator}
+          <div
+            class="antiPanel-navigator no-print {$deviceInfo.navigator.direction === 'horizontal'
+              ? 'portrait'
+              : 'landscape'} border-left"
+            class:fly={$deviceInfo.navigator.float}
+          >
+            <div class="antiPanel-wrap__content hulyNavPanel-container">
+              {#if currentApplication}
+                <NavHeader label={currentApplication.label} />
+                {#if currentApplication.navHeaderComponent}
+                  <Component
+                    is={currentApplication.navHeaderComponent}
+                    props={{
+                      currentSpace,
+                      currentSpecial,
+                      currentFragment
+                    }}
+                    shrink
+                  />
+                {/if}
               {/if}
+              <Navigator
+                {currentSpace}
+                {currentSpecial}
+                {currentFragment}
+                model={navigatorModel}
+                {currentApplication}
+                on:open={checkOnHide}
+              />
+              <NavFooter>
+                {#if currentApplication && currentApplication.navFooterComponent}
+                  <Component is={currentApplication.navFooterComponent} props={{ currentSpace }} />
+                {/if}
+              </NavFooter>
+            </div>
+            {#if !($deviceInfo.isMobile && $deviceInfo.isPortrait && $deviceInfo.minWidth)}
+              <Separator
+                name={'workbench'}
+                float={$deviceInfo.navigator.float ? 'navigator' : true}
+                index={0}
+                color={'var(--theme-navpanel-border)'}
+              />
             {/if}
-            <Navigator
-              {currentSpace}
-              {currentSpecial}
-              {currentFragment}
-              model={navigatorModel}
-              {currentApplication}
-              on:open={checkOnHide}
-            />
-            <NavFooter>
-              {#if currentApplication && currentApplication.navFooterComponent}
-                <Component is={currentApplication.navFooterComponent} props={{ currentSpace }} />
-              {/if}
-            </NavFooter>
           </div>
           <Separator
             name={'workbench'}
-            float={$deviceInfo.navigator.float ? 'navigator' : true}
+            float={$deviceInfo.navigator.float}
             index={0}
-            color={'var(--theme-navpanel-border)'}
+            color={'transparent'}
+            separatorSize={0}
+            short
           />
-        </div>
-        <Separator
-          name={'workbench'}
-          float={$deviceInfo.navigator.float}
-          index={0}
-          color={'transparent'}
-          separatorSize={0}
-          short
-        />
-      {/if}
-      <div
-        bind:this={contentPanel}
-        class={navigatorModel === undefined ? 'hulyPanels-container' : 'hulyComponent overflow-hidden'}
-        data-id={'contentPanel'}
-      >
-        {#if currentApplication && currentApplication.component}
-          <Component
-            is={currentApplication.component}
-            props={{
-              currentSpace
-            }}
-          />
-        {:else if specialComponent}
-          <Component
-            is={specialComponent.component}
-            props={{
-              model: navigatorModel,
-              ...specialComponent.componentProps,
-              currentSpace,
-              space: currentSpace,
-              navigationModel: specialComponent?.navigationModel
-            }}
-            on:action={(e) => {
-              if (e?.detail) {
-                const loc = getCurrentLocation()
-                loc.query = { ...loc.query, ...e.detail }
-                navigate(loc)
-              }
-            }}
-          />
-        {:else if currentView?.component !== undefined}
-          <Component is={currentView.component} props={{ ...currentView.componentProps, currentView }} />
-        {:else if $accessDeniedStore}
-          <div class="flex-center h-full">
-            <h2><Label label={workbench.string.AccessDenied} /></h2>
-          </div>
-        {:else}
-          <SpaceView {currentSpace} {currentView} {createItemDialog} {createItemLabel} />
         {/if}
+        <div
+          bind:this={contentPanel}
+          class={navigatorModel === undefined ? 'hulyPanels-container' : 'hulyComponent overflow-hidden'}
+          class:straighteningCorners={$sidebarStore.float &&
+            $sidebarStore.variant === SidebarVariant.EXPANDED &&
+            !(mobileAdaptive && $deviceInfo.isPortrait)}
+          data-id={'contentPanel'}
+        >
+          {#if currentApplication && currentApplication.component}
+            <Component
+              is={currentApplication.component}
+              props={{
+                currentSpace,
+                workbenchWidth
+              }}
+            />
+          {:else if specialComponent}
+            <Component
+              is={specialComponent.component}
+              props={{
+                model: navigatorModel,
+                ...specialComponent.componentProps,
+                currentSpace,
+                space: currentSpace,
+                navigationModel: specialComponent?.navigationModel,
+                workbenchWidth
+              }}
+              on:action={(e) => {
+                if (e?.detail) {
+                  const loc = getCurrentLocation()
+                  loc.query = { ...loc.query, ...e.detail }
+                  navigate(loc)
+                }
+              }}
+            />
+          {:else if currentView?.component !== undefined}
+            <Component
+              is={currentView.component}
+              props={{ ...currentView.componentProps, currentView, workbenchWidth }}
+            />
+          {:else if $accessDeniedStore}
+            <div class="flex-center h-full">
+              <h2><Label label={workbench.string.AccessDenied} /></h2>
+            </div>
+          {:else}
+            <SpaceView {currentSpace} {currentView} {createItemDialog} {createItemLabel} />
+          {/if}
+        </div>
       </div>
-    </div>
-    {#if !$deviceInfo.aside.float}
-      {#if $sidebarStore.variant === SidebarVariant.EXPANDED}
+      {#if $sidebarStore.variant === SidebarVariant.EXPANDED && !$sidebarStore.float}
         <Separator name={'main'} index={0} color={'transparent'} separatorSize={0} short />
       {/if}
       <WidgetsBar />
-    {/if}
+    </div>
   </div>
   <Dock />
-  {#if $deviceInfo.aside.float}
-    <div
-      class="antiPanel-navigator right fly no-print {$deviceInfo.navigator.direction === 'horizontal'
-        ? 'portrait'
-        : 'landscape'}"
-      style:display={$deviceInfo.aside.visible ? 'flex' : 'none'}
-    >
-      <Separator name={'main'} index={0} color={'transparent'} separatorSize={0} short float={'sidebar'} />
-      <div class="antiPanel-wrap__content hulyNavPanel-container">
-        <WidgetsBar />
-      </div>
-    </div>
-  {/if}
   <div bind:this={cover} class="cover" />
   <TooltipInstance />
   <PanelInstance bind:this={panelInstance} contentPanel={elementPanel}>
@@ -1064,9 +1056,15 @@
     background-color: var(--theme-panel-color);
     touch-action: none;
 
+    &.apps-horizontal {
+      flex-direction: column-reverse;
+    }
     &.inner {
       background-color: var(--theme-navpanel-color);
 
+      .straighteningCorners {
+        border-radius: var(--medium-BorderRadius) 0 0 var(--medium-BorderRadius);
+      }
       &.rounded {
         border-radius: 0 var(--medium-BorderRadius) var(--medium-BorderRadius) 0;
       }

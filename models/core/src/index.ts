@@ -14,7 +14,6 @@
 //
 
 import {
-  AccountRole,
   DOMAIN_BENCHMARK,
   DOMAIN_BLOB,
   DOMAIN_CONFIGURATION,
@@ -23,18 +22,17 @@ import {
   DOMAIN_SPACE,
   DOMAIN_STATUS,
   DOMAIN_TRANSIENT,
-  DOMAIN_TX,
-  systemAccountEmail
+  DOMAIN_TX
 } from '@hcengineering/core'
 import { type Builder } from '@hcengineering/model'
 import { TBenchmarkDoc } from './benchmark'
 import core from './component'
 import {
   TArrOf,
+  TAssociation,
   TAttachedDoc,
   TAttribute,
   TBlob,
-  TCard,
   TClass,
   TCollection,
   TConfiguration,
@@ -52,6 +50,7 @@ import {
   TObj,
   TPluginConfiguration,
   TRefTo,
+  TRelation,
   TTransientConfiguration,
   TType,
   TTypeAny,
@@ -63,25 +62,18 @@ import {
   TTypeHyperlink,
   TTypeIntlString,
   TTypeMarkup,
+  TTypePersonId,
   TTypeNumber,
   TTypeRank,
   TTypeRecord,
   TTypeRelatedDocument,
   TTypeString,
   TTypeTimestamp,
-  TVersion
+  TVersion,
+  TSequence
 } from './core'
 import { definePermissions } from './permissions'
-import {
-  TAccount,
-  TPermission,
-  TRole,
-  TSpace,
-  TSpaceType,
-  TSpaceTypeDescriptor,
-  TSystemSpace,
-  TTypedSpace
-} from './security'
+import { TPermission, TRole, TSpace, TSpaceType, TSpaceTypeDescriptor, TSystemSpace, TTypedSpace } from './security'
 import { defineSpaceType } from './spaceType'
 import { TDomainStatusPlaceholder, TStatus, TStatusCategory } from './status'
 import { TUserStatus } from './transient'
@@ -89,7 +81,7 @@ import { TTx, TTxApplyIf, TTxCreateDoc, TTxCUD, TTxMixin, TTxRemoveDoc, TTxUpdat
 
 export { coreId, DOMAIN_SPACE } from '@hcengineering/core'
 export * from './core'
-export { coreOperation } from './migration'
+export { coreOperation, getSocialIdByOldAccount, getAccountsFromTxes, getSocialKeyByOldEmail } from './migration'
 export * from './security'
 export * from './status'
 export * from './tx'
@@ -118,11 +110,11 @@ export function createModel (builder: Builder): void {
     TSpaceTypeDescriptor,
     TRole,
     TPermission,
-    TAccount,
     TAttribute,
     TType,
     TEnumOf,
     TTypeMarkup,
+    TTypePersonId,
     TTypeCollaborativeDoc,
     TArrOf,
     TRefTo,
@@ -144,30 +136,22 @@ export function createModel (builder: Builder): void {
     TEnum,
     TTypeAny,
     TTypeRelatedDocument,
-    TCard,
     TDocIndexState,
     TFullTextSearchContext,
     TConfiguration,
     TConfigurationElement,
     TIndexConfiguration,
     TStatus,
+    TSequence,
     TDomainStatusPlaceholder,
     TStatusCategory,
     TMigrationState,
     TBlob,
+    TRelation,
+    TAssociation,
     TDomainIndexConfiguration,
     TBenchmarkDoc,
     TTransientConfiguration
-  )
-
-  builder.createDoc(
-    core.class.Account,
-    core.space.Model,
-    {
-      email: systemAccountEmail,
-      role: AccountRole.Owner
-    },
-    core.account.System
   )
 
   builder.createDoc(core.class.DomainIndexConfiguration, core.space.Model, {

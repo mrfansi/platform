@@ -10,6 +10,8 @@ export interface DocChunk {
   idx: number
   // _id => hash mapping
   docs: DocInfo[]
+
+  size?: number // Estimated size of the chunk data
   finished: boolean
 }
 
@@ -23,6 +25,8 @@ export interface BackupClient {
   loadDocs: (domain: Domain, docs: Ref<Doc>[]) => Promise<Doc[]>
   upload: (domain: Domain, docs: Doc[]) => Promise<void>
   clean: (domain: Domain, docs: Ref<Doc>[]) => Promise<void>
+
+  getDomainHash: (domain: Domain) => Promise<string>
 
   sendForceClose: () => Promise<void>
 }

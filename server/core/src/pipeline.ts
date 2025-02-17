@@ -16,6 +16,7 @@
 import { Analytics } from '@hcengineering/analytics'
 import {
   toFindResult,
+  withContext,
   type Class,
   type Doc,
   type DocumentQuery,
@@ -66,6 +67,7 @@ class PipelineImpl implements Pipeline {
     return pipeline
   }
 
+  @withContext('build-chain')
   private async buildChain (
     ctx: MeasureContext,
     constructors: MiddlewareCreator[],
@@ -81,7 +83,7 @@ class PipelineImpl implements Pipeline {
         }
         current = newCur ?? current
       } catch (err: any) {
-        ctx.error('failed to initialize pipeline', { err, workspace: context.workspace.name })
+        ctx.error('failed to initialize pipeline', { err, workspace: context.workspace })
         // We need to call close for all items.
         await this.close()
         throw err

@@ -71,6 +71,7 @@ interface NodePatchSpec {
 export const MermaidExtension = CodeBlockLowlight.extend<MermaidOptions>({
   name: 'mermaid',
   group: 'block',
+  marks: 'inline-comment',
 
   draggable: true,
   selectable: true,
@@ -117,7 +118,8 @@ export const MermaidExtension = CodeBlockLowlight.extend<MermaidOptions>({
   },
 
   addProseMirrorPlugins () {
-    return [...(this.parent?.() ?? []), MermaidDecorator(this.options)]
+    const parent = (this.parent?.() ?? []).filter((p) => p.props.handlePaste === undefined)
+    return [...parent, MermaidDecorator(this.options)]
   },
 
   addNodeView () {
@@ -285,7 +287,9 @@ export const MermaidExtension = CodeBlockLowlight.extend<MermaidOptions>({
         stopEvent: (event) => {
           if (event instanceof DragEvent && !nodeState.folded) {
             event.preventDefault()
+            return true
           }
+          return false
         },
         update: (node, decorations) => {
           if (node.type.name !== MermaidExtension.name) return false

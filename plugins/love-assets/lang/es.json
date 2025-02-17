@@ -75,10 +75,16 @@
     "JoinMeeting": "Unirse a la reunión",
     "MeetingStart": "Inicio de la reunión",
     "MeetingEnd": "Fin de la reunión",
+    "EndMeeting": "Terminar reunión",
     "Status": "Estado",
     "Active": "Activo",
     "Finished": "Terminado",
     "StartWithRecording": "Iniciar con grabación",
-    "Language": "Idioma"
+    "Language": "Idioma",
+    "Kick": "Expulsar",
+    "WithAudio": "Incluir audio del sistema",
+    "ShareWithAudioTooltip": "Comparte tu pantalla con el audio del sistema. Reinicia la pantalla compartida para aplicar los cambios.",
+    "MicPermission": "Micrófono no encontrado, comprueba los permisos del navegador",
+    "CamPermission": "Cámara no encontrada, comprueba los permisos del navegador"
   }
 }

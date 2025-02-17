@@ -15,11 +15,21 @@
 
 import { PlatformError, Severity, Status } from '@hcengineering/platform'
 import { Lookup, MeasureContext, ReverseLookups, getObjectValue } from '.'
-import type { Account, Class, Doc, Ref } from './classes'
+import type { Class, Doc, Ref } from './classes'
+
 import core from './component'
 import { Hierarchy } from './hierarchy'
 import { checkMixinKey, matchQuery, resultSort } from './query'
-import type { DocumentQuery, FindOptions, FindResult, LookupData, Storage, TxResult, WithLookup } from './storage'
+import type {
+  AssociationQuery,
+  DocumentQuery,
+  FindOptions,
+  FindResult,
+  LookupData,
+  Storage,
+  TxResult,
+  WithLookup
+} from './storage'
 import type { Tx, TxCreateDoc, TxMixin, TxRemoveDoc, TxUpdateDoc } from './tx'
 import { TxProcessor } from './tx'
 import { toFindResult } from './utils'
@@ -30,9 +40,6 @@ import { toFindResult } from './utils'
 export abstract class MemDb extends TxProcessor implements Storage {
   private readonly objectsByClass = new Map<Ref<Class<Doc>>, Map<Ref<Doc>, Doc>>()
   private readonly objectById = new Map<Ref<Doc>, Doc>()
-
-  private readonly accountByPersonId = new Map<Ref<Doc>, Account[]>()
-  private readonly accountByEmail = new Map<string, [string, Account][]>()
 
   constructor (protected readonly hierarchy: Hierarchy) {
     super()
@@ -76,21 +83,6 @@ export abstract class MemDb extends TxProcessor implements Storage {
       throw new PlatformError(new Status(Severity.ERROR, core.status.ObjectNotFound, { _id }))
     }
     return doc as T
-  }
-
-  getAccountByPersonId (ref: Ref<Doc>): Account[] {
-    return this.accountByPersonId.get(ref) ?? []
-  }
-
-  getAccountByEmail (email: Account['email']): Account | undefined {
-    const accounts = this.accountByEmail.get(email)
-    if (accounts === undefined || accounts.length === 0) {
-      return undefined
-    }
-
-    if (accounts.length > 0) {
-      return accounts[accounts.length - 1][1]
-    }
   }
 
   findObject<T extends Doc>(_id: Ref<T>): T | undefined {
@@ -155,6 +147,35 @@ export abstract class MemDb extends TxProcessor implements Storage {
     return withLookup
   }
 
+  private async fillAssociations<T extends Doc>(docs: T[], associations: AssociationQuery[]): Promise<WithLookup<T>[]> {
+    const withLookup: WithLookup<T>[] = []
+    for (const doc of docs) {
+      const result = await this.getAssoctionValue(doc, associations)
+      withLookup.push(Object.assign({}, doc, { $associations: result }))
+    }
+    return withLookup
+  }
+
+  private async getAssoctionValue<T extends Doc>(
+    doc: T,
+    associations: AssociationQuery[]
+  ): Promise<Record<string, Doc[]>> {
+    const result: Record<string, Doc[]> = {}
+    for (const association of associations) {
+      const _id = association[0]
+      const assoc = this.findObject(_id)
+      if (assoc === undefined) continue
+      const isReverse = association[1] === -1
+      const key = !isReverse ? 'docA' : 'docB'
+      const key2 = !isReverse ? 'docB' : 'docA'
+      const _class = !isReverse ? assoc.classB : assoc.classA
+      const relations = await this.findAll(core.class.Relation, { association: _id, [key]: doc._id })
+      const objects = await this.findAll(_class, { _id: { $in: relations.map((r) => r[key2]) } })
+      result[_id] = objects
+    }
+    return result
+  }
+
   async findAll<T extends Doc>(
     _class: Ref<Class<T>>,
     query: DocumentQuery<T>,
@@ -181,6 +202,10 @@ export abstract class MemDb extends TxProcessor implements Storage {
     if (options?.lookup !== undefined) {
       result = await this.lookup(_class, result as T[], options.lookup)
       result = matchQuery(result, query, _class, this.hierarchy)
+    }
+
+    if (options?.associations !== undefined) {
+      result = await this.fillAssociations(result, options.associations)
     }
 
     if (options?.sort !== undefined) resultSort(result, options?.sort, _class, this.hierarchy, this)
@@ -232,42 +257,13 @@ export abstract class MemDb extends TxProcessor implements Storage {
     )
   }
 
-  addAccount (account: Account): void {
-    if (!this.accountByEmail.has(account.email)) {
-      this.accountByEmail.set(account.email, [])
-    }
-
-    this.accountByEmail.get(account.email)?.push([account._id, account])
-  }
-
   addDoc (doc: Doc): void {
     this.hierarchy.getAncestors(doc._class).forEach((_class) => {
       const arr = this.getObjectsByClass(_class)
       arr.set(doc._id, doc)
     })
-    if (this.hierarchy.isDerived(doc._class, core.class.Account)) {
-      const account = doc as Account
 
-      this.addAccount(account)
-
-      if (account.person !== undefined) {
-        this.accountByPersonId.set(account.person, [...(this.accountByPersonId.get(account.person) ?? []), account])
-      }
-    }
     this.objectById.set(doc._id, doc)
-  }
-
-  delAccount (account: Account): void {
-    const accounts = this.accountByEmail.get(account.email)
-    if (accounts !== undefined) {
-      const newAccounts = accounts.filter((it) => it[0] !== account._id)
-
-      if (newAccounts.length === 0) {
-        this.accountByEmail.delete(account.email)
-      } else {
-        this.accountByEmail.set(account.email, newAccounts)
-      }
-    }
   }
 
   delDoc (_id: Ref<Doc>): void {
@@ -279,42 +275,10 @@ export abstract class MemDb extends TxProcessor implements Storage {
     this.hierarchy.getAncestors(doc._class).forEach((_class) => {
       this.cleanObjectByClass(_class, _id)
     })
-    if (this.hierarchy.isDerived(doc._class, core.class.Account)) {
-      const account = doc as Account
-      this.delAccount(account)
-
-      if (account.person !== undefined) {
-        const acc = this.accountByPersonId.get(account.person) ?? []
-        this.accountByPersonId.set(
-          account.person,
-          acc.filter((it) => it._id !== _id)
-        )
-      }
-    }
   }
 
   updateDoc (_id: Ref<Doc>, doc: Doc, update: TxUpdateDoc<Doc> | TxMixin<Doc, Doc>): void {
-    if (this.hierarchy.isDerived(doc._class, core.class.Account) && update._class === core.class.TxUpdateDoc) {
-      const newEmail = (update as TxUpdateDoc<Account>).operations.email
-      if ((update as TxUpdateDoc<Account>).operations.person !== undefined) {
-        const account = doc as Account
-        if (account.person !== undefined) {
-          const acc = this.accountByPersonId.get(account.person) ?? []
-          this.accountByPersonId.set(
-            account.person,
-            acc.filter((it) => it._id !== _id)
-          )
-        }
-        const newPerson = (update as TxUpdateDoc<Account>).operations.person
-        if (newPerson !== undefined) {
-          this.accountByPersonId.set(newPerson, [...(this.accountByPersonId.get(newPerson) ?? []), account])
-        }
-      } else if (newEmail !== undefined) {
-        const account = doc as Account
-        this.delAccount(account)
-        this.addAccount({ ...account, email: newEmail })
-      }
-    }
+    // TODO: track updates on Contact to adjust memdb accounts?
   }
 }
 
@@ -370,7 +334,7 @@ export class ModelDb extends MemDb {
             this.updateDoc(cud.objectId, doc, cud)
             TxProcessor.updateDoc2Doc(doc, cud)
           } else {
-            ctx.error('no document found, failed to apply model transaction, skipping', {
+            ctx.warn('no document found, failed to apply model transaction, skipping', {
               _id: tx._id,
               _class: tx._class,
               objectId: cud.objectId
@@ -382,7 +346,7 @@ export class ModelDb extends MemDb {
           try {
             this.delDoc((tx as TxRemoveDoc<Doc>).objectId)
           } catch (err: any) {
-            ctx.error('no document found, failed to apply model transaction, skipping', {
+            ctx.warn('no document found, failed to apply model transaction, skipping', {
               _id: tx._id,
               _class: tx._class,
               objectId: (tx as TxRemoveDoc<Doc>).objectId
@@ -396,7 +360,7 @@ export class ModelDb extends MemDb {
             this.updateDoc(mix.objectId, doc, mix)
             TxProcessor.updateMixin4Doc(doc, mix)
           } else {
-            ctx.error('no document found, failed to apply model transaction, skipping', {
+            ctx.warn('no document found, failed to apply model transaction, skipping', {
               _id: tx._id,
               _class: tx._class,
               objectId: mix.objectId

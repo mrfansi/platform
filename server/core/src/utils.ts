@@ -1,9 +1,9 @@
 import core, {
-  AccountRole,
+  ClientConnectEvent,
   WorkspaceEvent,
   generateId,
   getTypeOf,
-  systemAccountEmail,
+  type WorkspaceIds,
   type Account,
   type BackupClient,
   type Branding,
@@ -11,17 +11,29 @@ import core, {
   type BulkUpdateEvent,
   type Class,
   type Client,
+  type ClientConnection,
   type Doc,
+  type DocChunk,
+  type DocumentQuery,
+  type Domain,
+  type FindOptions,
+  type FindResult,
   type MeasureContext,
   type ModelDb,
   type Ref,
+  type SearchResult,
   type SessionData,
+  type Tx,
+  type TxResult,
   type TxWorkspaceEvent,
-  type WorkspaceIdWithUrl
+  type PersonId,
+  systemAccount,
+  type PersonUuid
 } from '@hcengineering/core'
-import platform, { PlatformError, Severity, Status, unknownError } from '@hcengineering/platform'
-import { type Hash } from 'crypto'
+import { PlatformError, unknownError } from '@hcengineering/platform'
+import { createHash, type Hash } from 'crypto'
 import fs from 'fs'
+import type { DbAdapter } from './adapter'
 import { BackupClientOps } from './storage'
 import type { Pipeline } from './types'
 
@@ -143,52 +155,51 @@ export function updateHashForDoc (hash: Hash, _obj: any): void {
   }
 }
 
-export function getUser (modelDb: ModelDb, userEmail: string | undefined, admin?: boolean): Account {
-  if (userEmail === undefined) {
-    throw new PlatformError(new Status(Severity.ERROR, platform.status.Forbidden, {}))
-  }
-  const account = modelDb.getAccountByEmail(userEmail)
-  if (account === undefined) {
-    if (userEmail === systemAccountEmail || admin === true) {
-      return {
-        _id: core.account.System,
-        _class: core.class.Account,
-        role: AccountRole.Owner,
-        email: systemAccountEmail,
-        space: core.space.Model,
-        modifiedBy: core.account.System,
-        modifiedOn: 0
-      }
-    }
-    throw new PlatformError(new Status(Severity.ERROR, platform.status.Forbidden, {}))
-  }
-  return account
-}
-
 export class SessionDataImpl implements SessionData {
-  _account: Account | undefined
+  _removedMap: Map<Ref<Doc>, Doc> | undefined
+  _contextCache: Map<string, any> | undefined
+  _broadcast: SessionData['broadcast'] | undefined
 
   constructor (
-    readonly userEmail: string,
+    readonly account: Account,
     readonly sessionId: string,
     readonly admin: boolean | undefined,
-    readonly broadcast: SessionData['broadcast'],
-    readonly workspace: WorkspaceIdWithUrl,
+    _broadcast: SessionData['broadcast'] | undefined,
+    readonly workspace: WorkspaceIds,
     readonly branding: Branding | null,
     readonly isAsyncContext: boolean,
-    readonly removedMap: Map<Ref<Doc>, Doc>,
-    readonly contextCache: Map<string, any>,
+    _removedMap: Map<Ref<Doc>, Doc> | undefined,
+    _contextCache: Map<string, any> | undefined,
     readonly modelDb: ModelDb,
-    readonly rawAccount?: Account
-  ) {}
-
-  get account (): Account {
-    this._account = this.rawAccount ?? this._account ?? getUser(this.modelDb, this.userEmail, this.admin)
-    return this._account
+    readonly socialStringsToUsers: Map<PersonId, PersonUuid>
+  ) {
+    this._removedMap = _removedMap
+    this._contextCache = _contextCache
+    this._broadcast = _broadcast
   }
 
-  getAccount (account: Ref<Account>): Account | undefined {
-    return this.modelDb.findObject(account)
+  get broadcast (): SessionData['broadcast'] {
+    if (this._broadcast === undefined) {
+      this._broadcast = {
+        targets: {},
+        txes: []
+      }
+    }
+    return this._broadcast
+  }
+
+  get removedMap (): Map<Ref<Doc>, Doc> {
+    if (this._removedMap === undefined) {
+      this._removedMap = new Map()
+    }
+    return this._removedMap
+  }
+
+  get contextCache (): Map<string, any> {
+    if (this._contextCache === undefined) {
+      this._contextCache = new Map()
+    }
+    return this._contextCache
   }
 }
 
@@ -221,22 +232,19 @@ export function loadBrandingMap (brandingPath?: string): BrandingMap {
   return brandings
 }
 
-export function wrapPipeline (
-  ctx: MeasureContext,
-  pipeline: Pipeline,
-  wsUrl: WorkspaceIdWithUrl
-): Client & BackupClient {
+export function wrapPipeline (ctx: MeasureContext, pipeline: Pipeline, wsIds: WorkspaceIds): Client & BackupClient {
   const contextData = new SessionDataImpl(
-    systemAccountEmail,
+    systemAccount,
     'pipeline',
     true,
     { targets: {}, txes: [] },
-    wsUrl,
+    wsIds,
     null,
     true,
-    new Map(),
-    new Map(),
-    pipeline.context.modelDb
+    undefined,
+    undefined,
+    pipeline.context.modelDb,
+    new Map()
   )
   ctx.contextData = contextData
   if (pipeline.context.lowLevelStorage === undefined) {
@@ -254,11 +262,102 @@ export function wrapPipeline (
     getHierarchy: () => pipeline.context.hierarchy,
     getModel: () => pipeline.context.modelDb,
     loadChunk: (domain, idx) => backupOps.loadChunk(ctx, domain, idx),
+    getDomainHash: (domain) => backupOps.getDomainHash(ctx, domain),
     loadDocs: (domain, docs) => backupOps.loadDocs(ctx, domain, docs),
     upload: (domain, docs) => backupOps.upload(ctx, domain, docs),
     searchFulltext: async (query, options) => ({ docs: [], total: 0 }),
     sendForceClose: async () => {},
     tx: (tx) => pipeline.tx(ctx, [tx]),
     notify: (...tx) => {}
+  }
+}
+
+export function wrapAdapterToClient (ctx: MeasureContext, storageAdapter: DbAdapter, txes: Tx[]): ClientConnection {
+  class TestClientConnection implements ClientConnection {
+    isConnected = (): boolean => true
+
+    handler?: (event: ClientConnectEvent, lastTx: string | undefined, data: any) => Promise<void>
+
+    set onConnect (
+      handler: ((event: ClientConnectEvent, lastTx: string | undefined, data: any) => Promise<void>) | undefined
+    ) {
+      this.handler = handler
+      void this.handler?.(ClientConnectEvent.Connected, '', {})
+    }
+
+    get onConnect (): ((event: ClientConnectEvent, lastTx: string | undefined, data: any) => Promise<void>) | undefined {
+      return this.handler
+    }
+
+    async findAll<T extends Doc>(
+      _class: Ref<Class<Doc>>,
+      query: DocumentQuery<Doc>,
+      options?: FindOptions<Doc>
+    ): Promise<FindResult<T>> {
+      return (await storageAdapter.findAll(ctx, _class, query, options)) as any
+    }
+
+    async tx (tx: Tx): Promise<TxResult> {
+      return await storageAdapter.tx(ctx, tx)
+    }
+
+    async searchFulltext (): Promise<SearchResult> {
+      return { docs: [] }
+    }
+
+    async close (): Promise<void> {}
+
+    async loadChunk (domain: Domain): Promise<DocChunk> {
+      throw new Error('unsupported')
+    }
+
+    async getDomainHash (domain: Domain): Promise<string> {
+      return await storageAdapter.getDomainHash(ctx, domain)
+    }
+
+    async closeChunk (idx: number): Promise<void> {}
+
+    async loadDocs (domain: Domain, docs: Ref<Doc>[]): Promise<Doc[]> {
+      return []
+    }
+
+    async upload (domain: Domain, docs: Doc[]): Promise<void> {}
+
+    async clean (domain: Domain, docs: Ref<Doc>[]): Promise<void> {}
+
+    async loadModel (): Promise<Tx[]> {
+      return txes
+    }
+
+    async sendForceClose (): Promise<void> {}
+  }
+  return new TestClientConnection()
+}
+
+export async function calcHashHash (ctx: MeasureContext, domain: Domain, adapter: DbAdapter): Promise<string> {
+  const hash = createHash('sha256')
+
+  const it = adapter.find(ctx, domain)
+
+  try {
+    let count = 0
+    while (true) {
+      const part = await it.next(ctx)
+      if (part.length === 0) {
+        break
+      }
+      count += part.length
+      for (const doc of part) {
+        hash.update(doc.id)
+        hash.update(doc.hash)
+      }
+    }
+    if (count === 0) {
+      // Use empty hash for empty documents.
+      return ''
+    }
+    return hash.digest('hex')
+  } finally {
+    await it.close(ctx)
   }
 }

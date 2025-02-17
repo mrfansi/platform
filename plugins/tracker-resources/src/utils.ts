@@ -14,7 +14,7 @@
 //
 
 import { Analytics } from '@hcengineering/analytics'
-import { type Contact } from '@hcengineering/contact'
+import { type Person } from '@hcengineering/contact'
 import core, {
   SortingOrder,
   toIdMap,
@@ -36,7 +36,7 @@ import core, {
   type TxUpdateDoc
 } from '@hcengineering/core'
 import { type IntlString } from '@hcengineering/platform'
-import { createQuery, getClient } from '@hcengineering/presentation'
+import { createQuery, getClient, onClient } from '@hcengineering/presentation'
 import task, { getStatusIndex, makeRank, type ProjectType } from '@hcengineering/task'
 import { activeProjects as taskActiveProjects, taskTypeStore } from '@hcengineering/task-resources'
 import {
@@ -339,7 +339,7 @@ export function subIssueListProvider (subIssues: Issue[], target: Ref<Issue>): v
   }
 }
 
-export async function getPreviousAssignees (objectId: Ref<Issue> | undefined): Promise<Array<Ref<Contact>>> {
+export async function getPreviousAssignees (objectId: Ref<Issue> | undefined): Promise<Array<Ref<Person>>> {
   if (objectId === undefined) {
     return []
   }
@@ -354,7 +354,7 @@ export async function getPreviousAssignees (objectId: Ref<Issue> | undefined): P
     { objectId, 'operations.assignee': { $exists: true } },
     { sort: { modifiedOn: -1 } }
   )
-  const set = new Set<Ref<Contact>>()
+  const set = new Set<Ref<Person>>()
   const createAssignee = createTx?.attributes?.assignee
   for (const tx of updateTxes) {
     const assignee = tx.operations.assignee
@@ -577,36 +577,25 @@ export interface IssueRef {
 export type IssueReverseRevMap = Map<Ref<Doc>, IssueRef[]>
 export const relatedIssues = writable<IssueReverseRevMap>(new Map())
 
-function fillStores (): void {
-  const client = getClient()
-
-  if (client !== undefined) {
-    const relatedIssuesQuery = createQuery(true)
-
-    relatedIssuesQuery.query(
-      tracker.class.Issue,
-      { 'relations._id': { $exists: true } },
-      (res) => {
-        const nMap: IssueReverseRevMap = new Map()
-        for (const r of res) {
-          for (const rr of r.relations ?? []) {
-            nMap.set(rr._id, [...(nMap.get(rr._id) ?? []), { _id: r._id, status: r.status }])
-          }
-        }
-        relatedIssues.set(nMap)
-      },
-      {
-        projection: {
-          relations: 1,
-          status: 1
+const relatedIssuesQuery = createQuery(true)
+onClient(() => {
+  relatedIssuesQuery.query(
+    tracker.class.Issue,
+    { 'relations._id': { $exists: true } },
+    (res) => {
+      const nMap: IssueReverseRevMap = new Map()
+      for (const r of res) {
+        for (const rr of r.relations ?? []) {
+          nMap.set(rr._id, [...(nMap.get(rr._id) ?? []), { _id: r._id, status: r.status }])
         }
       }
-    )
-  } else {
-    setTimeout(() => {
-      fillStores()
-    }, 50)
-  }
-}
-
-fillStores()
+      relatedIssues.set(nMap)
+    },
+    {
+      projection: {
+        relations: 1,
+        status: 1
+      }
+    }
+  )
+})

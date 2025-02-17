@@ -50,7 +50,7 @@
 
   const client = getClient()
   const hierarchy = client.getHierarchy()
-  const me = getCurrentAccount()
+  const socialStrings = getCurrentAccount().socialIds
 
   const inboxClient = InboxNotificationsClientImpl.getClient()
   const notificationsByContextStore = inboxClient.inboxNotificationsByContext
@@ -95,7 +95,7 @@
   $: if (showArchive) {
     archivedActivityNotificationsQuery.query(
       notification.class.ActivityInboxNotification,
-      { archived: true, user: me._id },
+      { archived: true, user: { $in: socialStrings } },
       (res) => {
         archivedActivityNotifications = res
       },
@@ -112,7 +112,7 @@
 
     archivedOtherNotificationsQuery.query(
       notification.class.CommonInboxNotification,
-      { archived: true, user: me._id },
+      { archived: true, user: { $in: socialStrings } },
       (res) => {
         archivedOtherNotifications = res
       },
@@ -429,7 +429,9 @@
           />
         </Scroller>
       </div>
-      <Separator name="inbox" float={$deviceInfo.navigator.float ? 'navigator' : true} index={0} />
+      {#if !($deviceInfo.isMobile && $deviceInfo.isPortrait && $deviceInfo.minWidth)}
+        <Separator name="inbox" float={$deviceInfo.navigator.float ? 'navigator' : true} index={0} />
+      {/if}
     </div>
     <Separator
       name="inbox"

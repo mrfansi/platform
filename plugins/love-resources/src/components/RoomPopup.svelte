@@ -13,43 +13,50 @@
 // limitations under the License.
 -->
 <script lang="ts">
-  import { Person, PersonAccount } from '@hcengineering/contact'
-  import { personByIdStore, UserInfo } from '@hcengineering/contact-resources'
-  import { IdMap, getCurrentAccount, Ref, Class, Doc } from '@hcengineering/core'
-  import ui, {
-    ModernButton,
-    SplitButton,
+  import { Person, getCurrentEmployee } from '@hcengineering/contact'
+  import { UserInfo, personByIdStore } from '@hcengineering/contact-resources'
+  import { Class, Doc, IdMap, Ref } from '@hcengineering/core'
+
+  import {
     IconArrowLeft,
     IconUpOutline,
     Label,
-    eventToHTMLElement,
     Location,
+    ModernButton,
+    Scroller,
+    SplitButton,
+    eventToHTMLElement,
     location,
     navigate,
-    showPopup,
-    Scroller,
-    panelstore
+    panelstore,
+    showPopup
   } from '@hcengineering/ui'
+
   import {
+    MeetingMinutes,
     ParticipantInfo,
     Room,
     RoomType,
     isOffice,
     loveId,
     roomAccessIcon,
-    roomAccessLabel,
-    MeetingMinutes
+    roomAccessLabel
   } from '@hcengineering/love'
-  import { createEventDispatcher } from 'svelte'
-  import { getObjectLinkFragment } from '@hcengineering/view-resources'
   import { getClient } from '@hcengineering/presentation'
+  import view from '@hcengineering/view'
+  import { getObjectLinkFragment } from '@hcengineering/view-resources'
+  import { createEventDispatcher } from 'svelte'
   import love from '../plugin'
-  import { currentRoom, infos, invites, myInfo, myOffice, myRequests, currentMeetingMinutes } from '../stores'
+  import { currentMeetingMinutes, currentRoom, infos, invites, myInfo, myOffice, myRequests, rooms } from '../stores'
   import {
+    endMeeting,
     getRoomName,
+    isCamAllowed,
     isCameraEnabled,
     isConnected,
+    isMicAllowed,
     isMicEnabled,
+    isShareWithSound,
     isSharingEnabled,
     leaveRoom,
     screenSharing,
@@ -61,7 +68,7 @@
   import CamSettingPopup from './CamSettingPopup.svelte'
   import MicSettingPopup from './MicSettingPopup.svelte'
   import RoomAccessPopup from './RoomAccessPopup.svelte'
-  import view from '@hcengineering/view'
+  import ShareSettingPopup from './ShareSettingPopup.svelte'
 
   export let room: Room
 
@@ -75,7 +82,9 @@
   let joined: boolean = false
   $: joined = $myInfo?.room === room._id
 
-  $: allowLeave = $myInfo?.room !== ($myOffice?._id ?? love.ids.Reception)
+  $: isMyOffice = $myInfo?.room === $myOffice?._id
+
+  $: allowLeave = !isMyOffice && $myInfo?.room !== love.ids.Reception
 
   let info: ParticipantInfo[] = []
   $: info = $infos.filter((p) => p.room === room._id)
@@ -96,12 +105,25 @@
   }
 
   async function changeShare (): Promise<void> {
-    await setShare(!$isSharingEnabled)
+    const newValue = !$isSharingEnabled
+    const audio = newValue && $isShareWithSound
+    await setShare(newValue, audio)
   }
 
   async function leave (): Promise<void> {
     await leaveRoom($myInfo, $myOffice)
     dispatch('close')
+  }
+
+  async function end (): Promise<void> {
+    if (isOffice(room) && $myInfo !== undefined) {
+      await endMeeting(room, $rooms, $infos, $myInfo)
+    }
+    dispatch('close')
+  }
+
+  function shareSettings (e: MouseEvent): void {
+    showPopup(ShareSettingPopup, {}, eventToHTMLElement(e))
   }
 
   async function connect (): Promise<void> {
@@ -141,7 +163,7 @@
     })
   }
 
-  const me = (getCurrentAccount() as PersonAccount).person
+  const me = getCurrentEmployee()
   function canGoBack (joined: boolean, location: Location, meetingMinutes?: MeetingMinutes): boolean {
     if (!joined) return false
     if (location.path[2] !== loveId) return true
@@ -177,7 +199,10 @@
         size={'large'}
         icon={$isMicEnabled ? love.icon.MicEnabled : love.icon.MicDisabled}
         label={$isMicEnabled ? love.string.Mute : love.string.UnMute}
-        showTooltip={{ label: $isMicEnabled ? love.string.Mute : love.string.UnMute }}
+        showTooltip={{
+          label: !$isMicAllowed ? love.string.MicPermission : $isMicEnabled ? love.string.Mute : love.string.UnMute
+        }}
+        disabled={!$isMicAllowed}
         action={changeMute}
         secondIcon={IconUpOutline}
         secondAction={micSettings}
@@ -188,8 +213,14 @@
           size={'large'}
           icon={$isCameraEnabled ? love.icon.CamEnabled : love.icon.CamDisabled}
           label={$isCameraEnabled ? love.string.StopVideo : love.string.StartVideo}
-          showTooltip={{ label: $isCameraEnabled ? love.string.StopVideo : love.string.StartVideo }}
-          disabled={!$isConnected}
+          showTooltip={{
+            label: !$isCamAllowed
+              ? love.string.CamPermission
+              : $isCameraEnabled
+                ? love.string.StopVideo
+                : love.string.StartVideo
+          }}
+          disabled={!$isCamAllowed}
           action={changeCam}
           secondIcon={IconUpOutline}
           secondAction={camSettings}
@@ -197,14 +228,15 @@
         />
       {/if}
       {#if allowShare}
-        <ModernButton
-          icon={$isSharingEnabled ? love.icon.SharingEnabled : love.icon.SharingDisabled}
-          label={$isSharingEnabled ? love.string.StopShare : love.string.Share}
-          tooltip={{ label: $isSharingEnabled ? love.string.StopShare : love.string.Share }}
-          disabled={($screenSharing && !$isSharingEnabled) || !$isConnected}
-          kind={'secondary'}
+        <SplitButton
           size={'large'}
-          on:click={changeShare}
+          icon={$isSharingEnabled ? love.icon.SharingEnabled : love.icon.SharingDisabled}
+          showTooltip={{ label: $isSharingEnabled ? love.string.StopShare : love.string.Share }}
+          disabled={($screenSharing && !$isSharingEnabled) || !$isConnected}
+          action={changeShare}
+          secondIcon={IconUpOutline}
+          secondAction={shareSettings}
+          separate
         />
       {/if}
       <ModernButton
@@ -218,17 +250,27 @@
       />
     </div>
   {/if}
-  {#if $location.path[2] !== loveId || (joined && allowLeave) || !joined}
+  {#if $location.path[2] !== loveId || (joined && (allowLeave || isMyOffice)) || !joined}
     <div class="btns flex-row-center flex-reverse flex-no-shrink w-full flex-gap-2">
-      {#if joined && allowLeave}
-        <ModernButton
-          label={love.string.LeaveRoom}
-          icon={love.icon.LeaveRoom}
-          size={'large'}
-          kind={'negative'}
-          on:click={leave}
-        />
-      {:else if !joined}
+      {#if joined}
+        {#if allowLeave}
+          <ModernButton
+            label={love.string.LeaveRoom}
+            icon={love.icon.LeaveRoom}
+            size={'large'}
+            kind={'negative'}
+            on:click={leave}
+          />
+        {:else if isMyOffice}
+          <ModernButton
+            label={love.string.EndMeeting}
+            icon={love.icon.LeaveRoom}
+            size={'large'}
+            kind={'negative'}
+            on:click={end}
+          />
+        {/if}
+      {:else}
         <ModernButton
           icon={love.icon.EnterRoom}
           label={love.string.EnterRoom}

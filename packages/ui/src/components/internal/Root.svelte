@@ -11,9 +11,7 @@
     checkMobile,
     deviceOptionsStore as deviceInfo,
     checkAdaptiveMatching,
-    ButtonIcon,
-    IconDetailsFilled,
-    IconDetails
+    getLocalWeekStart
   } from '../../'
   import { desktopPlatform, getCurrentLocation, location, locationStorageKeyId, navigate } from '../../location'
   import uiPlugin from '../../plugin'
@@ -140,12 +138,16 @@
   updateDeviceSize()
 
   $: secondRow = checkAdaptiveMatching($deviceInfo.size, 'xs')
-  $: asideFloat = $deviceInfo.aside.float
-  $: asideOpen = $deviceInfo.aside.visible
   $: appsMini =
     $deviceInfo.isMobile &&
     (($deviceInfo.isPortrait && $deviceInfo.docWidth <= 480) ||
       (!$deviceInfo.isPortrait && $deviceInfo.docHeight <= 480))
+
+  const weekInfoFirstDay: number = getLocalWeekStart()
+  const savedFirstDayOfWeek = localStorage.getItem('firstDayOfWeek') ?? 'system'
+  $deviceInfo.firstDayOfWeek =
+    parseInt(savedFirstDayOfWeek === 'system' ? weekInfoFirstDay.toString() : savedFirstDayOfWeek, 10) ??
+    weekInfoFirstDay
 </script>
 
 <svelte:window bind:innerWidth={docWidth} bind:innerHeight={docHeight} />
@@ -200,20 +202,6 @@
           {/if}
         </div>
         <div class="flex-row-reverse" style:-webkit-app-region={'no-drag'}>
-          {#if asideFloat && !secondRow}
-            <div class="antiHSpacer x2" />
-            <ButtonIcon
-              icon={asideOpen ? IconDetailsFilled : IconDetails}
-              iconProps={{ fill: 'var(--theme-dark-color)' }}
-              kind={'tertiary'}
-              size={'extra-small'}
-              hasMenu
-              pressed={$deviceInfo.aside.visible}
-              on:click={() => {
-                $deviceInfo.aside.visible = !$deviceInfo.aside.visible
-              }}
-            />
-          {/if}
           <div class="clock">
             <Clock />
           </div>
@@ -234,17 +222,6 @@
           </div>
           <div class="flex-row-center flex-gap-0-5">
             <RootBarExtension position="right" />
-            <ButtonIcon
-              icon={asideOpen ? IconDetailsFilled : IconDetails}
-              iconProps={{ fill: 'var(--theme-dark-color)' }}
-              kind={'tertiary'}
-              size={'extra-small'}
-              hasMenu
-              pressed={$deviceInfo.aside.visible}
-              on:click={() => {
-                $deviceInfo.aside.visible = !$deviceInfo.aside.visible
-              }}
-            />
           </div>
         </div>
       {/if}

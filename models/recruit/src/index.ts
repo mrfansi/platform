@@ -213,7 +213,8 @@ export function createModel (builder: Builder): void {
                 ['assigned', view.string.Assigned, {}],
                 ['created', view.string.Created, {}],
                 ['subscribed', view.string.Subscribed, {}]
-              ]
+              ],
+              descriptors: [view.viewlet.List, view.viewlet.Table, task.viewlet.Kanban]
             }
           },
           {
@@ -331,7 +332,9 @@ export function createModel (builder: Builder): void {
     key: 'hideArchived',
     type: 'toggle',
     defaultValue: true,
-    label: recruit.string.HideArchivedVacancies
+    actionTarget: 'options',
+    action: view.function.HideArchived,
+    label: view.string.HideArchived
   }
 
   builder.createDoc(
@@ -361,7 +364,8 @@ export function createModel (builder: Builder): void {
       viewOptions: {
         groupBy: [],
         orderBy: [],
-        other: [vacancyHideArchivedOption]
+        other: [vacancyHideArchivedOption],
+        storageKey: 'vacancyViewOptions'
       }
     },
     recruit.viewlet.TableVacancy
@@ -431,6 +435,12 @@ export function createModel (builder: Builder): void {
       configOptions: {
         hiddenKeys: ['name', 'attachedTo'],
         sortable: true
+      },
+      viewOptions: {
+        groupBy: [],
+        orderBy: [],
+        other: [vacancyHideArchivedOption],
+        storageKey: 'vacancyViewOptions'
       }
     },
     recruit.viewlet.TableApplicant
@@ -450,8 +460,8 @@ export function createModel (builder: Builder): void {
     key: 'hideArchivedVacancies',
     type: 'toggle',
     defaultValue: true,
-    actionTarget: 'query',
-    action: recruit.function.HideArchivedVacancies,
+    actionTarget: 'options',
+    action: view.function.HideArchived,
     label: recruit.string.HideApplicantsFromArchivedVacancies
   }
 
@@ -502,7 +512,8 @@ export function createModel (builder: Builder): void {
       viewOptions: {
         groupBy: [],
         orderBy: [],
-        other: [applicationDoneOption, hideApplicantsFromArchivedVacanciesOption]
+        other: [applicationDoneOption, hideApplicantsFromArchivedVacanciesOption],
+        storageKey: 'applicantViewOptions'
       }
     },
     recruit.viewlet.ApplicantTable
@@ -521,8 +532,7 @@ export function createModel (builder: Builder): void {
         }
       },
       baseQuery: {
-        isDone: false,
-        '$lookup.space.archived': false
+        isDone: false
       }
     },
     recruit.viewlet.TableApplicantMatch
@@ -558,8 +568,10 @@ export function createModel (builder: Builder): void {
           actionTarget: 'category',
           action: view.function.ShowEmptyGroups,
           label: view.string.ShowEmptyGroups
-        }
-      ]
+        },
+        vacancyHideArchivedOption
+      ],
+      storageKey: 'applicantViewOptions'
     }
     if (colors) {
       model.other.push(showColorsViewOption)
@@ -581,6 +593,13 @@ export function createModel (builder: Builder): void {
         {
           key: 'status',
           props: { kind: 'list', size: 'small', shouldShowName: false }
+        },
+        {
+          key: 'kind',
+          label: task.string.TaskType,
+          presenter: task.component.TaskTypeListPresenter,
+          props: { kind: 'list', size: 'small', justify: 'center' },
+          displayProps: { key: 'applicant_kind' }
         },
         {
           key: '$lookup.attachedTo',
@@ -773,9 +792,6 @@ export function createModel (builder: Builder): void {
         strict: true,
         hiddenKeys: ['name', 'space', 'modifiedOn']
       },
-      baseQuery: {
-        '$lookup.space.archived': false
-      },
       viewOptions: {
         groupBy: ['company', 'dueTo', 'createdBy'],
         orderBy: [
@@ -784,7 +800,8 @@ export function createModel (builder: Builder): void {
           ['modifiedOn', SortingOrder.Descending],
           ['createdOn', SortingOrder.Descending]
         ],
-        other: [vacancyHideArchivedOption]
+        other: [vacancyHideArchivedOption],
+        storageKey: 'vacancyViewOptions'
       }
     },
     recruit.viewlet.ListVacancy

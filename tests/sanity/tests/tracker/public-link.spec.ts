@@ -9,7 +9,8 @@ test.describe('Tracker public link issues tests', () => {
   test('Public link generate', async ({ browser }) => {
     const publicLinkIssue: NewIssue = {
       title: `Public link generate issue-${generateId()}`,
-      description: 'Public link generate issue'
+      description: 'Public link generate issue',
+      projectName: 'Default'
     }
 
     let link: string
@@ -44,7 +45,6 @@ test.describe('Tracker public link issues tests', () => {
         await clearPage.goto(link)
 
         const clearIssuesDetailsPage = new IssuesDetailsPage(clearPage)
-        await clearIssuesDetailsPage.waitDetailsOpened(publicLinkIssue.title)
         await clearIssuesDetailsPage.checkIssue({
           ...publicLinkIssue,
           status: 'Backlog'
@@ -60,7 +60,8 @@ test.describe('Tracker public link issues tests', () => {
   test('Public link Revoke', async ({ browser }) => {
     const publicLinkIssue: NewIssue = {
       title: `Public link Revoke issue-${generateId()}`,
-      description: 'Public link Revoke issue'
+      description: 'Public link Revoke issue',
+      projectName: 'Default'
     }
 
     const newContext = await browser.newContext({ storageState: PlatformSetting })
@@ -89,7 +90,6 @@ test.describe('Tracker public link issues tests', () => {
         await setTestOptions(clearPage)
 
         const clearIssuesDetailsPage = new IssuesDetailsPage(clearPage)
-        await clearIssuesDetailsPage.waitDetailsOpened(publicLinkIssue.title)
         await clearIssuesDetailsPage.checkIssue({
           ...publicLinkIssue,
           status: 'Backlog'

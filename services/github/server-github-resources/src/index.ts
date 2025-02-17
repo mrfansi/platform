@@ -1,9 +1,8 @@
 //
 // Copyright © 2023 Hardcore Engineering Inc.
 //
-
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import chunter from '@hcengineering/chunter'
-import contact, { PersonAccount } from '@hcengineering/contact'
 import core, {
   Doc,
   DocumentUpdate,
@@ -15,7 +14,7 @@ import core, {
   TxCUD,
   TxProcessor,
   TxUpdateDoc,
-  systemAccountEmail,
+  systemAccountUuid,
   type Class,
   type TxMixin
 } from '@hcengineering/core'
@@ -27,7 +26,25 @@ import tracker from '@hcengineering/tracker'
 /**
  * @public
  */
+export async function OnGithubBroadcast (txes: Tx[], control: TriggerControl): Promise<Tx[]> {
+  // Enhance broadcast to send DocSyncInfo change only to system account.
+  control.ctx.contextData.broadcast.targets.github = (it) => {
+    if (TxProcessor.isExtendsCUD(it._class)) {
+      if ((it as TxCUD<Doc>).objectClass === github.class.DocSyncInfo) {
+        return [systemAccountUuid]
+      }
+    }
+  }
+  return []
+}
+
+/**
+ * @public
+ */
 export async function OnProjectChanges (txes: Tx[], control: TriggerControl): Promise<Tx[]> {
+  // Enhance broadcast to send DocSyncInfo change only to system account.
+  await OnGithubBroadcast(txes, control)
+
   const result: Tx[] = []
   const cache = new Map<string, any>()
 
@@ -80,10 +97,54 @@ export async function OnProjectChanges (txes: Tx[], control: TriggerControl): Pr
   return result
 }
 
+/**
+ * @public
+ */
+export async function OnProjectRemove (txes: Tx[], control: TriggerControl): Promise<Tx[]> {
+  const result: Tx[] = []
+  for (const ltx of txes) {
+    if (ltx._class === core.class.TxRemoveDoc) {
+      const cud = ltx as TxCUD<Doc>
+      if (control.hierarchy.isDerived(cud.objectClass, tracker.class.Project)) {
+        const project = control.removedMap.get(cud.objectId)
+        if (project === undefined) {
+          continue
+        }
+        if (control.hierarchy.hasMixin(project, github.mixin.GithubProject)) {
+          const repos = await control.findAll(control.ctx, github.class.GithubIntegrationRepository, {
+            githubProject: cud.objectId as Ref<GithubProject>
+          })
+          for (const repo of repos) {
+            result.push(
+              control.txFactory.createTxUpdateDoc(repo._class, repo.space, repo._id, {
+                enabled: false,
+                githubProject: null
+              })
+            )
+          }
+
+          const syncDocs = control.modelDb.findAllSync(github.class.DocSyncInfo, {
+            space: cud.objectId as Ref<Space>
+          })
+          for (const syncDoc of syncDocs) {
+            result.push(control.txFactory.createTxRemoveDoc(syncDoc._class, syncDoc.space, syncDoc._id))
+          }
+        }
+      }
+    }
+  }
+  if (result.length > 0) {
+    await OnGithubBroadcast(txes, control)
+  }
+  return result
+}
+
 // eslint-disable-next-line @typescript-eslint/explicit-function-return-type
 export default async () => ({
   trigger: {
-    OnProjectChanges
+    OnProjectChanges,
+    OnProjectRemove,
+    OnGithubBroadcast
   },
   functions: {
     TodoDoneTester
@@ -115,52 +176,50 @@ async function updateDocSyncInfo (
   cache: Map<string, any>,
   toApply: Tx[]
 ): Promise<void> {
-  const checkTx = (tx: Tx): boolean =>
-    control.hierarchy.isDerived(tx._class, core.class.TxCUD) &&
-    (tx as TxCUD<Doc>).objectClass === github.class.DocSyncInfo &&
-    (tx as TxCUD<Doc>).objectId === cud.objectId
-
-  const txes = [...control.txes, ...control.ctx.contextData.broadcast.txes, ...toApply]
-  // Check already captured Txes
-  for (const i of txes) {
-    if (checkTx(i)) {
-      // We have sync doc create request already.
-      return
-    }
-  }
-
-  const [account] = control.modelDb.findAllSync(contact.class.PersonAccount, {
-    _id: tx.modifiedBy as Ref<PersonAccount>
-  })
-  // Do not modify state if is modified by github service.
-  if (account === undefined) {
-    return
-  }
-  const projects =
-    (cache.get('projects') as GithubProject[]) ??
-    (await control.queryFind(control.ctx, github.mixin.GithubProject, {}, { projection: { _id: 1 } }))
-  cache.set('projects', projects)
-
-  if (projects.some((it) => it._id === (space as Ref<GithubProject>))) {
-    const sdoc =
-      (cache.get(cud.objectId) as DocSyncInfo) ??
-      (
-        await control.findAll(control.ctx, github.class.DocSyncInfo, {
-          _id: cud.objectId as Ref<DocSyncInfo>
-        })
-      ).shift()
-
-    // We need to check if sync doc is already exists.
-    if (sdoc === undefined) {
-      // Created by non github integration
-      // We need to create the doc sync info
-      createSyncDoc(control, cud, tx, space, toApply)
-    } else {
-      cache.set(cud.objectId, sdoc)
-      // We need to create the doc sync info
-      updateSyncDoc(control, cud, space, sdoc, toApply)
-    }
-  }
+  // TODO: FIXME
+  // throw new Error('Not implemented')
+  // const checkTx = (tx: Tx): boolean =>
+  //   control.hierarchy.isDerived(tx._class, core.class.TxCUD) &&
+  //   (tx as TxCUD<Doc>).objectClass === github.class.DocSyncInfo &&
+  //   (tx as TxCUD<Doc>).objectId === cud.objectId
+  // const txes = [...control.txes, ...control.ctx.contextData.broadcast.txes, ...toApply]
+  // // Check already captured Txes
+  // for (const i of txes) {
+  //   if (checkTx(i)) {
+  //     // We have sync doc create request already.
+  //     return
+  //   }
+  // }
+  // const [account] = control.modelDb.findAllSync(contact.class.PersonAccount, {
+  //   _id: tx.modifiedBy as PersonId
+  // })
+  // // Do not modify state if is modified by github service.
+  // if (account === undefined) {
+  //   return
+  // }
+  // const projects =
+  //   (cache.get('projects') as GithubProject[]) ??
+  //   (await control.queryFind(control.ctx, github.mixin.GithubProject, {}, { projection: { _id: 1 } }))
+  // cache.set('projects', projects)
+  // if (projects.some((it) => it._id === (space as Ref<GithubProject>))) {
+  //   const sdoc =
+  //     (cache.get(cud.objectId) as DocSyncInfo) ??
+  //     (
+  //       await control.findAll(control.ctx, github.class.DocSyncInfo, {
+  //         _id: cud.objectId as Ref<DocSyncInfo>
+  //       })
+  //     ).shift()
+  //   // We need to check if sync doc is already exists.
+  //   if (sdoc === undefined) {
+  //     // Created by non github integration
+  //     // We need to create the doc sync info
+  //     createSyncDoc(control, cud, tx, space, toApply)
+  //   } else {
+  //     cache.set(cud.objectId, sdoc)
+  //     // We need to create the doc sync info
+  //     updateSyncDoc(control, cud, space, sdoc, toApply)
+  //   }
+  // }
 }
 
 function isDocSyncUpdateRequired (h: Hierarchy, coll: TxCUD<Doc>): boolean {
@@ -206,14 +265,6 @@ function updateSyncDoc (
       data
     )
   )
-
-  control.ctx.contextData.broadcast.targets.github = (it) => {
-    if (control.hierarchy.isDerived(it._class, core.class.TxCUD)) {
-      if ((it as TxCUD<Doc>).objectClass === github.class.DocSyncInfo) {
-        return [systemAccountEmail]
-      }
-    }
-  }
 }
 
 function createSyncDoc (
@@ -249,11 +300,4 @@ function createSyncDoc (
       cud.objectId as Ref<DocSyncInfo>
     )
   )
-  control.ctx.contextData.broadcast.targets.github = (it) => {
-    if (control.hierarchy.isDerived(it._class, core.class.TxCUD)) {
-      if ((it as TxCUD<Doc>).objectClass === github.class.DocSyncInfo) {
-        return [systemAccountEmail]
-      }
-    }
-  }
 }

@@ -40,5 +40,10 @@ loadMetadata(textEditor.icon, {
   ScaleOut: `${icons}#scaleOut`,
   Download: `${icons}#download`,
   Note: `${icons}#note`,
-  Comment: `${icons}#comment`
+  Comment: `${icons}#comment`,
+  SelectTable: `${icons}#move`,
+  MergeCells: `${icons}#union`,
+  SplitCells: `${icons}#divide`,
+  Brush: `${icons}#brush`,
+  TextStyle: `${icons}#textStyle`
 })

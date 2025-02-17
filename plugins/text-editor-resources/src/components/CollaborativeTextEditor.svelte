@@ -17,23 +17,25 @@
 <script lang="ts">
   import { Analytics } from '@hcengineering/analytics'
   import {
+    AccountRole,
     type Blob,
     Class,
     type CollaborativeDoc,
     type Doc,
     type Ref,
     generateId,
+    getCurrentAccount,
     makeDocCollabId
   } from '@hcengineering/core'
   import { IntlString, translate } from '@hcengineering/platform'
   import {
+    DrawingCmd,
+    KeyedAttribute,
     getAttribute,
     getClient,
     getFileUrl,
     getImageSize,
-    imageSizeToRatio,
-    KeyedAttribute,
-    DrawingCmd
+    imageSizeToRatio
   } from '@hcengineering/presentation'
   import { markupToJSON } from '@hcengineering/text'
   import {
@@ -56,12 +58,6 @@
   import { createEventDispatcher, getContext, onDestroy, onMount } from 'svelte'
   import { Doc as YDoc } from 'yjs'
 
-  import { Completion } from '../Completion'
-  import { deleteAttachment } from '../command/deleteAttachment'
-  import { textEditorCommandHandler } from '../commands'
-  import { EditorKitOptions, getEditorKit } from '../../src/kits/editor-kit'
-  import { Provider } from '../provider/types'
-  import { createLocalProvider, createRemoteProvider } from '../provider/utils'
   import textEditor, {
     CollaborationIds,
     CollaborationUser,
@@ -69,22 +65,27 @@
     TextEditorCommandHandler,
     TextEditorHandler
   } from '@hcengineering/text-editor'
+  import { EditorKitOptions, getEditorKit } from '../../src/kits/editor-kit'
+  import { deleteAttachment } from '../command/deleteAttachment'
+  import { textEditorCommandHandler } from '../commands'
+  import { Provider } from '../provider/types'
+  import { createLocalProvider, createRemoteProvider } from '../provider/utils'
   import { addTableHandler } from '../utils'
 
-  import CollaborationUsers from './CollaborationUsers.svelte'
   import TextEditorToolbar from './TextEditorToolbar.svelte'
   import { noSelectionRender, renderCursor } from './editor/collaboration'
   import { defaultEditorAttributes } from './editor/editorProps'
-  import { DrawingBoardExtension, SavedBoard } from './extension/drawingBoard'
+  import { SavedBoard } from './extension/drawingBoard'
   import { EmojiExtension } from './extension/emoji'
   import { FileUploadExtension } from './extension/fileUploadExt'
   import { ImageUploadExtension } from './extension/imageUploadExt'
   import { InlineCommandsExtension } from './extension/inlineCommands'
+  import { InlineCommentCollaborationExtension } from './extension/inlineComment'
   import { LeftMenuExtension } from './extension/leftMenu'
+  import { mermaidOptions } from './extension/mermaid'
+  import { ReferenceExtension, referenceConfig } from './extension/reference'
   import { type FileAttachFunction } from './extension/types'
-  import { completionConfig, inlineCommandsConfig } from './extensions'
-  import { MermaidExtension, mermaidOptions } from './extension/mermaid'
-  import { InlineCommentExtension } from './extension/inlineComment'
+  import { inlineCommandsConfig } from './extensions'
 
   export let object: Doc
   export let attribute: KeyedAttribute
@@ -118,6 +119,9 @@
 
   const client = getClient()
   const dispatch = createEventDispatcher()
+
+  const account = getCurrentAccount()
+  $: isGuest = account.role === AccountRole.DocGuest
 
   const objectClass = object._class
   const objectId = object._id
@@ -434,9 +438,14 @@
   onMount(async () => {
     await ph
 
-    if (enableInlineComments) {
+    if (enableInlineComments && !isGuest) {
       optionalExtensions.push(
-        InlineCommentExtension.configure({ ydoc, boundary, popupContainer: editorPopupContainer, requestSideSpace })
+        InlineCommentCollaborationExtension.configure({
+          ydoc,
+          boundary,
+          popupContainer: editorPopupContainer,
+          requestSideSpace
+        })
       )
     }
 
@@ -464,6 +473,14 @@
               isHidden: () => !showToolbar
             }
           },
+          mermaid: {
+            ...mermaidOptions,
+            ydoc,
+            ydocContentField: field
+          },
+          drawingBoard: {
+            getSavedBoard
+          },
           ...kitOptions
         }),
         ...optionalExtensions,
@@ -478,15 +495,13 @@
           render: renderCursor,
           selectionRender: noSelectionRender
         }),
-        Completion.configure({
-          ...completionConfig,
+        ReferenceExtension.configure({
+          ...referenceConfig,
           showDoc (event: MouseEvent, _id: string, _class: string) {
             dispatch('open-document', { event, _id, _class })
           }
         }),
         EmojiExtension,
-        MermaidExtension.configure({ ...mermaidOptions, ydoc, ydocContentField: field }),
-        DrawingBoardExtension.configure({ getSavedBoard }),
         ...extensions
       ],
       parseOptions: {
@@ -578,11 +593,11 @@
 
   <div class="textInput">
     <div class="select-text" class:hidden={loading} style="width: 100%;" bind:this={element} />
-    <div class="collaborationUsers-container flex-col flex-gap-2 pt-2">
+    <!-- <div class="collaborationUsers-container flex-col flex-gap-2 pt-2">
       {#if remoteProvider && editor && userComponent}
         <CollaborationUsers provider={remoteProvider} {editor} component={userComponent} />
       {/if}
-    </div>
+    </div> -->
   </div>
 
   {#if refActions.length > 0}

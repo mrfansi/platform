@@ -1,5 +1,4 @@
 import {
-  toWorkspaceString,
   type Doc,
   type DocInfo,
   type Domain,
@@ -7,7 +6,7 @@ import {
   type MeasureContext,
   type Ref,
   type StorageIterator,
-  type WorkspaceId
+  type WorkspaceUuid
 } from '@hcengineering/core'
 
 export * from '@hcengineering/storage'
@@ -15,8 +14,8 @@ export * from '@hcengineering/storage'
 /**
  * @public
  */
-export function getBucketId (workspaceId: WorkspaceId): string {
-  return toWorkspaceString(workspaceId)
+export function getBucketId (workspace: WorkspaceUuid): string {
+  return workspace
 }
 
 const chunkSize = 200
@@ -52,6 +51,7 @@ export class BackupClientOps {
     return ctx.with('load-chunk', {}, async (ctx) => {
       idx = idx ?? this.idIndex++
       let chunk: ChunkInfo | undefined = this.chunkInfo.get(idx)
+      let size = 0
       if (chunk !== undefined) {
         chunk.index++
         if (chunk.finished === undefined || chunk.finished) {
@@ -74,14 +74,22 @@ export class BackupClientOps {
           break
         }
         docs.push(..._docs)
+        for (const d of _docs) {
+          size += d.size ?? 0
+        }
       }
 
       return {
         idx,
         docs,
-        finished: chunk.finished
+        finished: chunk.finished,
+        size
       }
     })
+  }
+
+  getDomainHash (ctx: MeasureContext, domain: Domain): Promise<string> {
+    return this.storage.getDomainHash(ctx, domain)
   }
 
   closeChunk (ctx: MeasureContext, idx: number): Promise<void> {

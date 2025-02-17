@@ -16,6 +16,7 @@
 import core, {
   DOMAIN_MODEL,
   DOMAIN_MODEL_TX,
+  DOMAIN_RELATION,
   DOMAIN_TX,
   SortingOrder,
   TxProcessor,
@@ -27,6 +28,8 @@ import core, {
   matchQuery,
   toFindResult,
   withContext,
+  type AssociationQuery,
+  type WorkspaceIds,
   type Class,
   type Doc,
   type DocInfo,
@@ -58,8 +61,7 @@ import core, {
   type TxRemoveDoc,
   type TxResult,
   type TxUpdateDoc,
-  type WithLookup,
-  type WorkspaceId
+  type WithLookup
 } from '@hcengineering/core'
 import {
   type DbAdapter,
@@ -67,7 +69,8 @@ import {
   type DomainHelperOperations,
   type ServerFindOptions,
   type StorageAdapter,
-  type TxAdapter
+  type TxAdapter,
+  calcHashHash
 } from '@hcengineering/server-core'
 import {
   type AbstractCursor,
@@ -266,7 +269,7 @@ abstract class MongoAdapterBase implements DbAdapter {
     return this.db.collection(domain).deleteMany(this.translateRawQuery(query)).then()
   }
 
-  abstract init (): Promise<void>
+  abstract init (ctx: MeasureContext): Promise<void>
 
   collection<TSchema extends Document = Document>(domain: Domain): Collection<TSchema> {
     return this._db.collection(domain)
@@ -461,6 +464,32 @@ abstract class MongoAdapterBase implements DbAdapter {
     return result
   }
 
+  private getAssociations (associations: AssociationQuery[]): LookupStep[] {
+    const res: LookupStep[] = []
+    for (const association of associations) {
+      const assoc = this.modelDb.findObject(association[0])
+      if (assoc === undefined) continue
+      const isReverse = association[1] === -1
+      const _class = !isReverse ? assoc.classB : assoc.classA
+      const targetDomain = this.hierarchy.getDomain(_class)
+      if (targetDomain === DOMAIN_MODEL) continue
+      const as = association[0] + '_hidden_association'
+      res.push({
+        from: DOMAIN_RELATION,
+        localField: '_id',
+        foreignField: isReverse ? 'docB' : 'docA',
+        as
+      })
+      res.push({
+        from: targetDomain,
+        localField: as + '.' + (isReverse ? 'docA' : 'docB'),
+        foreignField: '_id',
+        as: association[0] + '_association'
+      })
+    }
+    return res
+  }
+
   private fillLookup<T extends Doc>(
     _class: Ref<Class<T>>,
     object: any,
@@ -484,6 +513,25 @@ abstract class MongoAdapterBase implements DbAdapter {
     } else {
       targetObject.$lookup[key] = this.modelDb.findAllSync(_class, { _id: targetObject[key] })[0]
     }
+  }
+
+  private fillAssociationsValue (associations: AssociationQuery[], object: any): Record<string, Doc[]> {
+    const res: Record<string, Doc[]> = {}
+    for (const association of associations) {
+      const assocKey = association[0] + '_hidden_association'
+      const data = object[assocKey]
+      if (data !== undefined && Array.isArray(data)) {
+        const filtered = new Set(
+          data.filter((it) => it.association === association[0]).map((it) => (association[1] === 1 ? it.docB : it.docA))
+        )
+        const fullKey = association[0] + '_association'
+        const arr = object[fullKey]
+        if (arr !== undefined && Array.isArray(arr)) {
+          res[association[0]] = arr.filter((it) => filtered.has(it._id))
+        }
+      }
+    }
+    return res
   }
 
   private fillLookupValue<T extends Doc>(
@@ -615,6 +663,11 @@ abstract class MongoAdapterBase implements DbAdapter {
       })
     }
 
+    if (options.associations !== undefined && options.associations.length > 0) {
+      const assoc = this.getAssociations(options.associations)
+      steps.push(...assoc)
+    }
+
     if (slowPipeline) {
       if (Object.keys(tquery.base).length > 0) {
         pipeline.push({ $match: tquery.base })
@@ -679,6 +732,12 @@ abstract class MongoAdapterBase implements DbAdapter {
       })
       if (row.$lookup !== undefined) {
         for (const [, v] of Object.entries(row.$lookup)) {
+          this.stripHash(v)
+        }
+      }
+      if (options.associations !== undefined && options.associations.length > 0) {
+        row.$associations = this.fillAssociationsValue(options.associations, row)
+        for (const [, v] of Object.entries(row.$associations)) {
           this.stripHash(v)
         }
       }
@@ -747,7 +806,7 @@ abstract class MongoAdapterBase implements DbAdapter {
 
   private clearExtraLookups (row: any): void {
     for (const key in row) {
-      if (key.endsWith('_lookup')) {
+      if (key.endsWith('_lookup') || key.endsWith('_association')) {
         // eslint-disable-next-line
         delete row[key]
       }
@@ -842,6 +901,7 @@ abstract class MongoAdapterBase implements DbAdapter {
       const domain = options?.domain ?? this.hierarchy.getDomain(_class)
       if (
         options?.lookup != null ||
+        options?.associations != null ||
         this.isEnumSort(_class, options) ||
         this.isRulesSort(options) ||
         options?.domainLookup !== undefined
@@ -1025,6 +1085,11 @@ abstract class MongoAdapterBase implements DbAdapter {
     return Date.now().toString(16) // Current hash value
   }
 
+  @withContext('get-domain-hash')
+  async getDomainHash (ctx: MeasureContext, domain: Domain): Promise<string> {
+    return await calcHashHash(ctx, domain, this)
+  }
+
   strimSize (str?: string): string {
     if (str == null) {
       return ''
@@ -1098,61 +1163,6 @@ abstract class MongoAdapterBase implements DbAdapter {
     })
   }
 
-  update (ctx: MeasureContext, domain: Domain, operations: Map<Ref<Doc>, Partial<Doc>>): Promise<void> {
-    return ctx.with('update', { domain }, async () => {
-      const coll = this.collection(domain)
-
-      // remove old and insert new ones
-      const ops = Array.from(operations.entries())
-      let skip = 500
-      while (ops.length > 0) {
-        const part = ops.splice(0, skip)
-        try {
-          await ctx.with(
-            'bulk-update',
-            {},
-            () => {
-              return coll.bulkWrite(
-                part.map((it) => {
-                  const { $unset, ...set } = it[1] as any
-                  if ($unset !== undefined) {
-                    for (const k of Object.keys(set)) {
-                      if ($unset[k] === '') {
-                        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-                        delete $unset[k]
-                      }
-                    }
-                  }
-                  return {
-                    updateOne: {
-                      filter: { _id: it[0] },
-                      update: {
-                        $set: { ...set, '%hash%': this.curHash() },
-                        ...($unset !== undefined ? { $unset } : {})
-                      }
-                    }
-                  }
-                }),
-                {
-                  ordered: false
-                }
-              )
-            },
-            {
-              updates: part.length
-            }
-          )
-        } catch (err: any) {
-          ctx.error('failed on bulk write', { error: err, skip })
-          if (skip !== 1) {
-            ops.push(...part)
-            skip = 1 // Let's update one by one, to loose only one failed variant.
-          }
-        }
-      }
-    })
-  }
-
   clean (ctx: MeasureContext, domain: Domain, docs: Ref<Doc>[]): Promise<void> {
     return ctx.with('clean', {}, async () => {
       if (docs.length > 0) {
@@ -1175,7 +1185,7 @@ interface OperationBulk {
 }
 
 class MongoAdapter extends MongoAdapterBase {
-  async init (): Promise<void> {
+  async init (ctx: MeasureContext): Promise<void> {
     await this._db.init()
   }
 
@@ -1511,7 +1521,7 @@ class MongoAdapter extends MongoAdapterBase {
 class MongoTxAdapter extends MongoAdapterBase implements TxAdapter {
   txColl: Collection<Doc> | undefined
 
-  async init (): Promise<void> {
+  async init (ctx: MeasureContext): Promise<void> {
     await this._db.init(DOMAIN_TX)
     await this._db.init(DOMAIN_MODEL_TX)
   }
@@ -1520,7 +1530,6 @@ class MongoTxAdapter extends MongoAdapterBase implements TxAdapter {
     if (tx.length === 0) {
       return []
     }
-
     const opName = tx.length === 1 ? 'tx-one' : 'tx'
     const modelTxes: Tx[] = []
     const baseTxes: Tx[] = []
@@ -1615,7 +1624,7 @@ class MongoTxAdapter extends MongoAdapterBase implements TxAdapter {
     const systemTx: Tx[] = []
     const userTx: Tx[] = []
 
-    // Ignore Employee accounts.
+    // Ignore old Employee accounts.
     function isPersonAccount (tx: Tx): boolean {
       return (
         (tx._class === core.class.TxCreateDoc ||
@@ -1749,15 +1758,16 @@ function translateLikeQuery (pattern: string): { $regex: string, $options: strin
  */
 export async function createMongoAdapter (
   ctx: MeasureContext,
+  contextVars: Record<string, any>,
   hierarchy: Hierarchy,
   url: string,
-  workspaceId: WorkspaceId,
+  workspaceId: WorkspaceIds,
   modelDb: ModelDb,
   storage?: StorageAdapter,
   options?: DbAdapterOptions
 ): Promise<DbAdapter> {
   const client = getMongoClient(url)
-  const db = getWorkspaceMongoDB(await client.getClient(), workspaceId)
+  const db = getWorkspaceMongoDB(await client.getClient(), workspaceId.dataId ?? workspaceId.uuid)
 
   return new MongoAdapter(db, hierarchy, modelDb, client, options)
 }
@@ -1767,13 +1777,14 @@ export async function createMongoAdapter (
  */
 export async function createMongoTxAdapter (
   ctx: MeasureContext,
+  contextVars: Record<string, any>,
   hierarchy: Hierarchy,
   url: string,
-  workspaceId: WorkspaceId,
+  workspaceId: WorkspaceIds,
   modelDb: ModelDb
 ): Promise<TxAdapter> {
   const client = getMongoClient(url)
-  const db = getWorkspaceMongoDB(await client.getClient(), workspaceId)
+  const db = getWorkspaceMongoDB(await client.getClient(), workspaceId.dataId ?? workspaceId.uuid)
 
   return new MongoTxAdapter(db, hierarchy, modelDb, client)
 }

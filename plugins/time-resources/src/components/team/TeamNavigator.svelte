@@ -30,7 +30,7 @@
     task.class.Project,
     {
       archived: false,
-      members: getCurrentAccount()._id
+      members: { $in: getCurrentAccount().socialIds }
     },
     (result) => {
       projects = result
@@ -88,11 +88,12 @@
     </Scroller>
     <NavFooter />
   </div>
-  <Separator
-    name={'time'}
-    float={$deviceInfo.navigator.float ? 'navigator' : true}
-    index={1}
-    disabledWhen={['panel-aside']}
-    color={'var(--theme-divider-color)'}
-  />
+  {#if !($deviceInfo.isMobile && $deviceInfo.isPortrait && $deviceInfo.minWidth)}
+    <Separator
+      name={'time'}
+      float={$deviceInfo.navigator.float ? 'navigator' : true}
+      index={0}
+      color={'var(--theme-divider-color)'}
+    />
+  {/if}
 </div>
